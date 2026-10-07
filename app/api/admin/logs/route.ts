@@ -8,7 +8,7 @@ export async function GET(req: Request) {
     const result = new URL(req.url).searchParams.get("result");
     const logs: Record<string, unknown>[] = [];
     for (let from = 0; ; from += 1000) {
-      let query = db().from("scan_logs").select("id,scanned_token,result,scanned_by,scanned_at,tickets(name)").order("scanned_at", { ascending: false }).order("id", { ascending: true }).range(from, from + 999);
+      let query = db().from("scan_logs").select("id,scanned_token,result,scanned_by,scanned_at,tickets(name,roll_number,phone)").order("scanned_at", { ascending: false }).order("id", { ascending: true }).range(from, from + 999);
       if (result === "attempted" || result === "invalid") query = query.in("result", ["invalid", "already_used"]);
       else if (result && ["valid", "already_used"].includes(result)) query = query.eq("result", result);
       const { data, error } = await query;

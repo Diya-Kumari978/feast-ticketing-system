@@ -29,7 +29,6 @@ export async function POST(req: Request) {
     if (body.mode === "resend" && body.ticketId) {
       const { data, error } = await s.from("tickets").select("*").eq("id", body.ticketId).eq("payment_status", "confirmed").single();
       if (error || !data) return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
-      if(!process.env.RESEND_API_KEY||!process.env.EMAIL_FROM)return NextResponse.json({error:"Email delivery is not configured."},{status:503});
       const {error:auditError}=await s.from("manual_approvals").insert({ticket_id:data.id,approved_by:admin,reason:`Resend ticket email: ${reason.data}`});
       if(auditError)throw auditError;
       await sendTicketEmail(data);

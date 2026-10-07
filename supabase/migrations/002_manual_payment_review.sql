@@ -4,12 +4,12 @@ drop function if exists public.approve_manual_ticket(uuid,text,text);
 alter table public.tickets drop column if exists payment_reference;
 alter table public.tickets drop constraint if exists tickets_payment_method_check;
 alter table public.tickets add constraint tickets_payment_method_check
-  check (payment_method in ('gateway','manual','jazzcash','easypaisa','bank_transfer'));
+	check (payment_method is null or payment_method in ('gateway','manual'));
 alter table public.tickets
   add column if not exists payment_screenshot_path text,
   add column if not exists payment_rejection_reason text,
-  add column if not exists ticket_type text not null default 'General Admission',
-  add column if not exists amount_due integer not null default 1000;
+	add column if not exists ticket_type text,
+	add column if not exists amount_due integer not null default 250;
 
 create table if not exists public.payment_reviews (
   id uuid primary key default gen_random_uuid(),

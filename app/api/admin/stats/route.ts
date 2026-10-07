@@ -15,13 +15,26 @@ export async function GET() {
   try {
     await requireAdmin();
     const s = db();
+    const fast = await s.rpc("admin_dashboard_stats");
+    if (!fast.error && fast.data && typeof fast.data === "object") {
+      const value = fast.data as Record<string, unknown>;
+      return NextResponse.json({
+        valid: Number(value.valid) || 0, used: Number(value.used) || 0,
+        pending: Number(value.pending) || 0, invalid: Number(value.invalid) || 0,
+        total: Number(value.total) || 0, recentScans: Array.isArray(value.recentScans) ? value.recentScans : [],
+      }, { headers: { "Cache-Control": "private, max-age=5, stale-while-revalidate=10" } });
+    }
+    const functionMissing = fast.error && (fast.error.code === "PGRST202" || fast.error.code === "42883");
+    if (fast.error && !functionMissing) throw fast.error;
+
+    // Keep the dashboard usable until migration 008 has been applied.
     const [all, valid, pending, used, invalid, scans] = await Promise.all([
       s.from("tickets").select("id", { count: "exact", head: true }),
       s.from("tickets").select("id", { count: "exact", head: true }).eq("payment_status", "confirmed").eq("status", "valid"),
       s.from("tickets").select("id", { count: "exact", head: true }).eq("payment_status", "pending"),
       s.from("tickets").select("id", { count: "exact", head: true }).eq("status", "used"),
       s.from("scan_logs").select("id", { count: "exact", head: true }).in("result", ["invalid", "already_used"]),
-      s.from("scan_logs").select("id,scanned_token,result,scanned_by,scanned_at,tickets(name,ticket_type)").order("scanned_at", { ascending: false }).limit(20),
+      s.from("scan_logs").select("id,scanned_token,result,scanned_by,scanned_at,tickets(name,roll_number,phone)").order("scanned_at", { ascending: false }).limit(20),
     ]);
     const queryResults = [
       ["total tickets", all], ["valid tickets", valid], ["pending tickets", pending],
@@ -42,7 +55,7 @@ export async function GET() {
       invalid: invalid.count ?? 0,
       total: all.count ?? 0,
       recentScans: Array.isArray(scans.data) ? scans.data : [],
-    });
+    }, { headers: { "Cache-Control": "private, max-age=5, stale-while-revalidate=10" } });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json(emptyStats, { status: 401 });

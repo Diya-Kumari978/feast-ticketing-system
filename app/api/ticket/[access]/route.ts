@@ -20,17 +20,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ access:
       name: data.name,
       email: data.email,
       phone: data.phone,
-      ticketType: data.ticket_type || "General Admission",
-      amountDue: data.amount_due || EVENT_CONFIG.price,
-      paymentMethod: data.payment_method,
-      orderId: `${EVENT_CONFIG.ticketPrefix}-${String(data.id).slice(0, 8).toUpperCase()}`,
+      rollNumber: data.roll_number,
+      amountDue: data.amount_due ?? EVENT_CONFIG.price,
+      orderId: `${EVENT_CONFIG.ticketPrefix}-${String(data.id).slice(0, 6).toUpperCase()}`,
       rejectionReason: data.payment_rejection_reason || null,
     };
     if (data.payment_status === "confirmed" && data.status === "used") {
-      return json({ status: "used", ...base, usedAt: data.used_at });
+      return json({ status: "used", ...base, usedAt: data.used_at, checkedInBy: data.checked_in_by, qr: data.qr_token ? await makeQrDataUrl(data.qr_token) : null });
     }
     if (data.payment_status !== "confirmed" || !data.qr_token) {
-      return json({ status: data.payment_status, ...base });
+      const status = data.payment_status === "failed" ? "rejected" : data.payment_status;
+      return json({ status, ...base });
     }
 
     // The QR image is generated on demand. The QR token itself is created atomically by review_payment.

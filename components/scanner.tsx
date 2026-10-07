@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import EVENT_CONFIG from "@/lib/event-config";
 
 type TicketMatch = { id: string; name: string; email: string; phone: string; status: string; qr_token: string };
-type Outcome = { result: string; ticket?: { name: string; ticket_type: string; id: string; used_at: string; checked_in_by: string } };
+type Outcome = { result: string; ticket?: { name: string; roll_number: string | null; phone: string; id: string; used_at: string; checked_in_by: string } };
 
 export default function Scanner() {
   const scanner = useRef<any>(null);
@@ -16,6 +16,22 @@ export default function Scanner() {
   const [checking, setChecking] = useState(false);
   const [searchMessage, setSearchMessage] = useState("");
   const [cameraMessage, setCameraMessage] = useState("");
+  const [scanNextReady, setScanNextReady] = useState(false);
+
+  function feedback(result: string) {
+    try {
+      const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
+      oscillator.connect(gain); gain.connect(context.destination);
+      oscillator.frequency.value = result === "valid" ? 880 : result === "already_used" ? 260 : 170;
+      gain.gain.setValueAtTime(.12, context.currentTime); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .3);
+      oscillator.start(); oscillator.stop(context.currentTime + .3);
+    } catch {}
+    navigator.vibrate?.(result === "valid" ? 120 : [100, 70, 100]);
+    if ("speechSynthesis" in window) {
+      const message = result === "valid" ? "Payment successful" : result === "already_used" ? "Already used" : "Invalid ticket";
+      window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(message));
+    }
+  }
 
   const submitToken = useCallback(async (token: string) => {
     setChecking(true);
@@ -24,11 +40,8 @@ export default function Scanner() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Scan failed");
       setOutcome(result);
-      const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
-      oscillator.connect(gain); gain.connect(context.destination); oscillator.frequency.value = result.result === "valid" ? 880 : 260;
-      gain.gain.setValueAtTime(.12, context.currentTime); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .3);
-      oscillator.start(); oscillator.stop(context.currentTime + .3);
-      navigator.vibrate?.(result.result === "valid" ? 120 : [100, 70, 100]);
+      setScanNextReady(false); window.setTimeout(() => setScanNextReady(true), 2000);
+      feedback(result.result);
     } catch (error) {
       setCameraMessage(error instanceof Error ? error.message : "Scan failed.");
     } finally {
@@ -130,7 +143,7 @@ export default function Scanner() {
       <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "22px 0" }}/>
       <h2>Manual search</h2>
       <form className="toolbar" onSubmit={searchNow}>
-        <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Name, email, or phone" aria-label="Search name, email, or phone" />
+        <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Name, roll number, email, or phone" aria-label="Search name, roll number, email, or phone" />
         <button type="submit" className="btn" disabled={searching}>{searching ? <><span className="spinner"/> Searching...</> : "Search"}</button>
       </form>
       {searchMessage && <p className={searchMessage.startsWith("No confirmed") ? "muted" : "error"} role="status">{searchMessage}</p>}
@@ -141,9 +154,9 @@ export default function Scanner() {
     </div>
     {outcome && <div className={`result-screen ${outcome.result === "valid" ? "" : outcome.result === "already_used" ? "bad" : "invalid"}`}>
       <div><div style={{ fontSize: 64 }}>{outcome.result === "valid" ? "✓" : "×"}</div>
-        <h1>{outcome.result === "valid" ? "VALID TICKET" : outcome.result === "already_used" ? "REJECTED — Already Used" : "INVALID TICKET — Not issued by our system"}</h1>
-        {outcome.result !== "invalid" && <div><p>{outcome.ticket?.name}</p><p>Ticket Type: {outcome.ticket?.ticket_type}</p><p>Order ID: {EVENT_CONFIG.ticketPrefix}-{outcome.ticket?.id.slice(0, 8).toUpperCase()}</p><p>{outcome.result === "valid" ? "Check-in time" : "First check-in"}: {outcome.ticket?.used_at ? new Date(outcome.ticket.used_at).toLocaleString() : ""}</p><p>{outcome.result === "valid" ? "Marked as Used" : `Scanned by ${outcome.ticket?.checked_in_by}`}</p></div>}
-        <button className="btn light" onClick={() => { setOutcome(null); setCameraMessage(""); void startCamera(); }}>Scan next</button>
+        <h1>{outcome.result === "valid" ? "Valid Ticket" : outcome.result === "already_used" ? "Rejected - Already Used" : "Invalid Ticket - Not issued by our system"}</h1>
+        {outcome.result !== "invalid" && <div><p>{outcome.ticket?.name}</p><p>Roll number: {outcome.ticket?.roll_number || "—"}</p><p>Order code: {EVENT_CONFIG.ticketPrefix}-{outcome.ticket?.id.slice(0, 6).toUpperCase()}</p><p>{outcome.result === "valid" ? "Check-in time" : "First check-in"}: {outcome.ticket?.used_at ? new Date(outcome.ticket.used_at).toLocaleString() : ""}</p><p>{outcome.result === "valid" ? "Marked as Used" : `First checked in by ${outcome.ticket?.checked_in_by}`}</p></div>}
+        {scanNextReady ? <button className="btn light" onClick={() => { setOutcome(null); setCameraMessage(""); void startCamera(); }}>Scan next</button> : <p className="fine">Ready for next scan shortly…</p>}
       </div>
     </div>}
   </>;

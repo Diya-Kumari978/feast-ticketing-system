@@ -1,5 +1,5 @@
 import {describe,it,expect} from "vitest";
-import {normalizePhone,emailSchema,paymentMethodSchema,ticketTypeSchema} from "@/lib/validation";
+import {normalizePhone,emailSchema,rollNumberSchema,ticketRegistrationSchema} from "@/lib/validation";
 import {submissionDecision} from "@/lib/domain";
 
 describe("identity normalization",()=>{
@@ -19,9 +19,9 @@ describe("duplicate handling",()=>{
   it("creates when no registration exists",()=>expect(submissionDecision(undefined)).toBe("create"));
 });
 
-describe("manual payment input",()=>{
-  it("accepts only supported payment channels",()=>{expect(paymentMethodSchema.safeParse("jazzcash").success).toBe(true);expect(paymentMethodSchema.safeParse("cash").success).toBe(false);});
-  it("accepts the configured ticket type",()=>expect(ticketTypeSchema.parse("General Admission")).toBe("General Admission"));
+describe("ticket registration input",()=>{
+	it("normalizes a valid roll number",()=>expect(rollNumberSchema.parse(" cs-123 ")).toBe("CS-123"));
+	it("accepts the required phone format",()=>expect(ticketRegistrationSchema.safeParse({name:"Example Name",email:"person@example.com",rollNumber:"CS-123",phone:"03001234567"}).success).toBe(true));
 });
 
 describe("atomic scan contract model",()=>{

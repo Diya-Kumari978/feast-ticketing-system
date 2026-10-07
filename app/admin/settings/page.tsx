@@ -1,2 +1,19 @@
-import EVENT_CONFIG from "@/lib/event-config";
-export default function Settings(){return <><div className="eyebrow">Event settings</div><h1>Settings</h1><section className="card" style={{maxWidth:600}}><div className="request-details"><div><small>Event</small><b>{EVENT_CONFIG.name}</b></div><div><small>Date</small><b>{EVENT_CONFIG.date}</b></div><div><small>Venue</small><b>{EVENT_CONFIG.venue}</b></div><div><small>Ticket price</small><b>PKR {EVENT_CONFIG.price}</b></div><div><small>Expected attendees</small><b>{EVENT_CONFIG.attendees}</b></div></div><p className="fine">Payment account destinations are managed in the local environment configuration.</p></section></>}
+import { redirect } from "next/navigation";
+import { getAdmin } from "@/lib/auth";
+import { adminAccounts } from "@/lib/admin-accounts";
+import AdminProfiles from "@/components/admin-profiles";
+
+const profileEmails = new Set(["ch.zubair2006@gmail.com", "shahnawazaliperhiar@gmail.com"]);
+
+export default async function Settings() {
+  const session = await getAdmin();
+  if (!session) redirect(`/admin/login?next=${encodeURIComponent("/admin/settings")}`);
+  const accounts = adminAccounts().filter(account => profileEmails.has(account.email.trim().toLowerCase()))
+    .map(({ name, email }) => ({ name, email: email.trim().toLowerCase(), isCurrent: email.trim().toLowerCase() === session.email.toLowerCase() }));
+
+  return <>
+    <div className="eyebrow">Access and security</div><h1>Admin profiles</h1>
+    <p className="muted" style={{ maxWidth: 720 }}>Manage the two Feast administrators. Passwords are never displayed; password changes are stored as salted hashes.</p>
+    <AdminProfiles accounts={accounts}/>
+  </>;
+}

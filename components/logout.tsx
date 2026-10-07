@@ -1,1 +1,1 @@
-"use client";export default function Logout(){return <button onClick={async()=>{await fetch("/api/admin/logout",{method:"POST"});location.href="/admin/login";}} className="btn light" style={{marginTop:12,padding:"9px 12px",fontSize:12}}>Sign out</button>}
+"use client";export default function Logout(){return <button onClick={async()=>{await fetch("/api/admin/logout",{method:"POST"});location.href="/admin/login";}} className="btn light admin-signout">Sign out</button>}

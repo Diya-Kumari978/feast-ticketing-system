@@ -1,226 +1,129 @@
 "use client";
-import { useEffect, useRef, useState, FormEvent } from "react";
+
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import PublicNavbar from "@/components/public-navbar";
+import UserFooter from "@/components/user-footer";
 import EVENT_CONFIG from "@/lib/event-config";
 
-const choices = [
-  { id: "jazzcash", name: "JazzCash", title: process.env.NEXT_PUBLIC_JAZZCASH_TITLE, account: process.env.NEXT_PUBLIC_JAZZCASH_ACCOUNT },
-  { id: "easypaisa", name: "Easypaisa", title: process.env.NEXT_PUBLIC_EASYPAISA_TITLE, account: process.env.NEXT_PUBLIC_EASYPAISA_ACCOUNT },
-  { id: "bank_transfer", name: "Bank Transfer", title: process.env.NEXT_PUBLIC_BANK_TITLE, account: process.env.NEXT_PUBLIC_BANK_ACCOUNT },
-];
-const REGISTRATION_STORAGE_KEY = "feastRegistration";
-type SavedRegistration = {
-  accessToken: string;
-  ticketId?: string;
-  name: string;
-  email: string;
-  phone: string;
-  ticketType: string;
-  paymentMethod: string;
-  screenshotFileName: string;
-};
-
-function chime() {
-  try {
-    const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain();
-    oscillator.connect(gain); gain.connect(context.destination); oscillator.frequency.value = 880;
-    gain.gain.setValueAtTime(.12, context.currentTime); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .35);
-    oscillator.start(); oscillator.stop(context.currentTime + .35);
-  } catch {}
-}
+const DETAILS_KEY = "feastDetails";
+type RegistrationDetails = { name: string; email: string; rollNumber: string; phone: string };
 
 export default function Home() {
-  const [method, setMethod] = useState("jazzcash"), [busy, setBusy] = useState(false), [uploadStep, setUploadStep] = useState<"compressing" | "uploading" | "submitting" | null>(null), [error, setError] = useState("");
-  const [status, setStatus] = useState(""), [access, setAccess] = useState(""), [fileName, setFileName] = useState("");
-  const [name, setName] = useState(""), [email, setEmail] = useState(""), [phone, setPhone] = useState("");
-  const [ticketType, setTicketType] = useState("General Admission"), [screenshot, setScreenshot] = useState<File | null>(null);
-  const [savedRegistration, setSavedRegistration] = useState<SavedRegistration | null>(null), [restoreReady, setRestoreReady] = useState(false);
-  const [approved, setApproved] = useState(false);
-  const screenshotInput = useRef<HTMLInputElement>(null);
-  const selected = choices.find(option => option.id === method)!;
+  const router = useRouter();
+  const [details, setDetails] = useState<RegistrationDetails>({ name: "", email: "", rollNumber: "", phone: "" });
+  const [error, setError] = useState("");
+  const [savedAccess, setSavedAccess] = useState("");
+  const [savedStatus, setSavedStatus] = useState("pending");
+  const [savedReason, setSavedReason] = useState("");
+  const savedStatusRef = useRef("pending");
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(REGISTRATION_STORAGE_KEY);
-      if (saved) {
-        const registration = JSON.parse(saved) as Partial<SavedRegistration>;
+      const existingTicket = localStorage.getItem("feastRegistration");
+      if (existingTicket) {
+        const registration = JSON.parse(existingTicket) as Partial<RegistrationDetails> & { accessToken?: unknown };
         if (typeof registration.accessToken === "string" && /^[a-f0-9]{64}$/.test(registration.accessToken)) {
-          const restored: SavedRegistration = {
-            accessToken: registration.accessToken,
-            ticketId: registration.ticketId,
-            name: typeof registration.name === "string" ? registration.name : "",
-            email: typeof registration.email === "string" ? registration.email : "",
-            phone: typeof registration.phone === "string" ? registration.phone : "",
-            ticketType: typeof registration.ticketType === "string" ? registration.ticketType : "General Admission",
-            paymentMethod: choices.some(choice => choice.id === registration.paymentMethod) ? registration.paymentMethod! : "jazzcash",
-            screenshotFileName: typeof registration.screenshotFileName === "string" ? registration.screenshotFileName : "",
-          };
-          setSavedRegistration(restored);
-          setAccess(restored.accessToken);
-          setName(restored.name);
-          setEmail(restored.email);
-          setPhone(restored.phone);
-          setTicketType(restored.ticketType);
-          setMethod(restored.paymentMethod);
-          setFileName(restored.screenshotFileName);
+          setSavedAccess(registration.accessToken);
+          setDetails(current => ({ ...current, name: registration.name || "", email: registration.email || "", rollNumber: registration.rollNumber || "", phone: registration.phone || "" }));
+          return;
         }
       }
-    } catch {
-      setError("Saved registration could not be read in this browser.");
-    } finally {
-      setRestoreReady(true);
-    }
+      const saved = sessionStorage.getItem(DETAILS_KEY);
+      if (saved) setDetails({ ...details, ...JSON.parse(saved) });
+    } catch { setError("Saved details could not be restored. Please check the fields and try again."); }
+  // Read once when the page opens; state changes should not overwrite the saved draft.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!access) return;
-    let active = true;
-    let terminal = false;
-    let inFlight = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
-    const checkStatus = async () => {
-      if (!active || terminal || inFlight) return;
+    if (!savedAccess) return;
+    let active = true, inFlight = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      if (!active || inFlight) return;
       inFlight = true;
-      let shouldContinue = true;
       try {
-        const started = performance.now();
-        const response = await fetch(`/api/ticket/${access}`, { cache: "no-store" });
-        console.info(`[ticket status] GET /api/ticket ${Math.round(performance.now() - started)}ms`);
-        if (!response.ok) return;
+        const response = await fetch(`/api/ticket/${savedAccess}`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Ticket status is temporarily unavailable.");
         const ticket = await response.json();
         if (!active) return;
-        if (ticket.status === "pending") {
-          setStatus("Payment submitted. Pending verification.");
-        } else if (ticket.status === "confirmed" || ticket.status === "approved") {
-          terminal = true;
-          shouldContinue = false;
-          setStatus("");
-          setApproved(true);
-          chime();
-          navigator.vibrate?.([120, 50, 120]);
-          redirectTimer = setTimeout(() => { location.href = `/payment-success/${access}`; }, 1200);
-        } else if (ticket.status === "failed" || ticket.status === "rejected") {
-          terminal = true;
-          shouldContinue = false;
-          setStatus(`Payment rejected: ${ticket.rejectionReason || "Contact the Feast team."}`);
-        } else if (ticket.status === "used") {
-          terminal = true;
-          shouldContinue = false;
-          setStatus("Checked In");
-        }
-      } catch { /* Retry transient network errors while the registration remains pending. */ }
+        savedStatusRef.current = ticket.status;
+        setSavedStatus(ticket.status);
+        setSavedReason(ticket.rejectionReason || "");
+      } catch { /* Try again after the next polling interval. */ }
       finally {
         inFlight = false;
-        if (active && shouldContinue && !terminal) timer = setTimeout(checkStatus, 3000);
+        if (active && savedStatusRef.current === "pending") timer = setTimeout(check, 3000);
       }
     };
-    void checkStatus();
-    const onVisibility = () => {
-      if (document.visibilityState !== "visible" || terminal) return;
-      if (timer) clearTimeout(timer);
-      if (!inFlight) void checkStatus();
-    };
+    void check();
+    const onVisibility = () => { if (document.visibilityState === "visible") { if (timer) clearTimeout(timer); void check(); } };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { active = false; terminal = true; if (timer) clearTimeout(timer); if (redirectTimer) clearTimeout(redirectTimer); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [access]);
+    return () => { active = false; if (timer) clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [savedAccess]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true); setUploadStep("compressing"); setError(""); setStatus("");
-    try {
-      if (!screenshot) throw new Error("Choose your payment screenshot first.");
-      const bitmap = await createImageBitmap(screenshot);
-      const scale = Math.min(1, 1600 / bitmap.width);
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Could not prepare the payment screenshot.");
-      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      bitmap.close();
-      const compressedBlob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Could not compress the screenshot.")), "image/jpeg", 0.8));
-      const compressed = new File([compressedBlob], screenshot.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
-      const formData = new FormData();
-      formData.set("name", name);
-      formData.set("email", email);
-      formData.set("phone", phone);
-      formData.set("ticketType", ticketType);
-      formData.set("paymentMethod", method);
-      formData.set("screenshot", compressed);
-      setUploadStep("uploading");
-      const response = await fetch("/api/register", { method: "POST", body: formData });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Registration failed");
-      setUploadStep("submitting");
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      const accessToken = typeof result.accessToken === "string" ? result.accessToken : "";
-      if (!/^[a-f0-9]{64}$/.test(accessToken)) throw new Error("Registration was saved but the ticket access token was missing.");
-      const registration: SavedRegistration = {
-        accessToken,
-        ticketId: typeof result.id === "string" ? result.id : undefined,
-        name,
-        email,
-        phone,
-        ticketType,
-        paymentMethod: method,
-        screenshotFileName: screenshot?.name || fileName,
-      };
-      localStorage.setItem(REGISTRATION_STORAGE_KEY, JSON.stringify(registration));
-      setSavedRegistration(registration);
-      setAccess(accessToken);
-      setStatus("Payment submitted. Pending verification.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Please try again.");
-    } finally {
-      setBusy(false);
-      setUploadStep(null);
-    }
+  function update(field: keyof RegistrationDetails, value: string) {
+    setDetails(current => ({ ...current, [field]: value }));
+    if (error) setError("");
   }
 
-  function registerAnotherPerson() {
-    localStorage.removeItem(REGISTRATION_STORAGE_KEY);
-    setSavedRegistration(null);
-    setAccess("");
-    setStatus("");
+  function continueToPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const clean = { name: details.name.trim(), email: details.email.trim().toLowerCase(), rollNumber: details.rollNumber.trim().toUpperCase(), phone: details.phone.trim() };
+    if (clean.name.length < 2 || clean.name.length > 60) return setError("Enter a name between 2 and 60 characters.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean.email)) return setError("Enter a valid email address.");
+    if (!/^[A-Z0-9/-]{3,20}$/.test(clean.rollNumber)) return setError("Roll number must be 3–20 letters, numbers, hyphens, or slashes.");
+    if (!/^03\d{9}$/.test(clean.phone)) return setError("Enter your 11-digit phone number starting with 03.");
+    sessionStorage.setItem(DETAILS_KEY, JSON.stringify(clean));
+    setDetails(clean);
     setError("");
-    setName("");
-    setEmail("");
-    setPhone("");
-    setTicketType("General Admission");
-    setMethod("jazzcash");
-    setFileName("");
-    setScreenshot(null);
-    setApproved(false);
-    if (screenshotInput.current) screenshotInput.current.value = "";
+    router.push("/payment");
+  }
+
+  function registerAnother() {
+    localStorage.removeItem("feastRegistration");
+    sessionStorage.removeItem(DETAILS_KEY);
+    savedStatusRef.current = "pending";
+    setSavedAccess(""); setSavedStatus("pending"); setSavedReason(""); setDetails({ name: "", email: "", rollNumber: "", phone: "" });
   }
 
   return <main className="site-wrap">
-    {approved && <div className="result-screen"><div><div className="result-icon">✓</div><h1>Payment Verified</h1><p>Your Feast ticket is ready.</p></div></div>}
     <PublicNavbar />
-    <section className="hero-band" id="about"><div className="hero-copy"><span className="eyebrow">One campus · One celebration</span><h1>{EVENT_CONFIG.name}</h1></div></section>
-    <section className="register-layout" id="events">
+    <section className="hero-band">
+      <div className="hero-copy">
+        <span className="eyebrow" style={{ color: "#A5F3FC" }}>A winter evening of campus celebration</span>
+        <h1>{EVENT_CONFIG.name}</h1>
+        <p>{EVENT_CONFIG.heroTagline}</p>
+        <div className="hero-chips"><span className="hero-chip">❄ {EVENT_CONFIG.date}</span></div>
+      </div>
+    </section>
+
+    {savedAccess ? <section className="card saved-registration-card">
+      <div className="saved-status-icon" aria-hidden="true">{savedStatus === "confirmed" ? "✓" : savedStatus === "used" ? "✓" : savedStatus === "rejected" || savedStatus === "failed" ? "!" : <span className="pending-ring"/>}</div>
+      <h2>{savedStatus === "confirmed" ? "Payment Successful" : savedStatus === "used" ? "Checked In" : savedStatus === "rejected" || savedStatus === "failed" ? "Payment not approved" : "Pending verification"}</h2>
+      {savedStatus === "pending" && <p className="success-note">Payment submitted. Please wait until the admin verifies and approves it.</p>}
+      {(savedStatus === "rejected" || savedStatus === "failed") && <p className="error" role="alert">{savedReason || "Payment was not approved. Open your ticket to submit a new screenshot."}</p>}
+      {savedStatus === "confirmed" || savedStatus === "used" ? <Link className="btn full" href={`/ticket/${savedAccess}`}>View ticket and QR</Link> : <Link className="btn light full" href={`/ticket/${savedAccess}`}>View payment status</Link>}
+      <button className="btn full register-another-home" type="button" onClick={registerAnother}>Register another person</button>
+    </section> : <section className="register-layout">
       <div className="card form-card">
-        <div className="section-heading"><span>Get Your Ticket</span></div>
-        <form className="form" method="post" action="/api/register" encType="multipart/form-data" onSubmit={submit}>
-          <div className="field"><label htmlFor="name">Full Name</label><input id="name" name="name" value={name} onChange={event => setName(event.target.value)} placeholder="Enter your full name" required minLength={2} maxLength={120}/></div>
-          <div className="field"><label htmlFor="email">Email Address</label><input id="email" name="email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Enter your email" required/></div>
-          <div className="field"><label htmlFor="phone">Phone Number</label><input id="phone" name="phone" value={phone} onChange={event => setPhone(event.target.value)} inputMode="tel" placeholder="Enter your phone number" required/></div>
-          <div className="field"><label htmlFor="ticketType">Ticket Fee</label><select id="ticketType" name="ticketType" value={ticketType} onChange={event => setTicketType(event.target.value)}><option value="General Admission">PKR {EVENT_CONFIG.price}</option></select></div>
-          <div className="field"><label>Payment Method</label><div className="payment-options">{choices.map(option => <label className={`payment-choice ${method === option.id ? "chosen" : ""}`} key={option.id}><input type="radio" name="paymentMethod" value={option.id} checked={method === option.id} onChange={() => setMethod(option.id)}/><span className="method-icon">{option.id === "bank_transfer" ? "▤" : "◉"}</span>{option.name}</label>)}</div></div>
-          <div className="account-box"><div><b>Send PKR {EVENT_CONFIG.price}</b><span>{selected.title || selected.name}</span>{selected.account && <strong>{selected.account}</strong>}</div></div>
-          <div className="field"><label htmlFor="screenshot">Payment Screenshot</label><input ref={screenshotInput} id="screenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required={!savedRegistration} disabled={!!savedRegistration} onChange={event => { const file = event.target.files?.[0] || null; setScreenshot(file); setFileName(file?.name || ""); }}/><small className="fine">PNG, JPG or WebP · Max 4 MB{fileName ? ` · ${fileName}` : ""}</small></div>
-          <button className="btn full" disabled={busy || !!access || !restoreReady}>{busy ? <><span className="spinner"/> {uploadStep === "compressing" ? "Compressing..." : uploadStep === "uploading" ? "Uploading..." : "Submitting..."}</> : "Proceed to Payment →"}</button>
+        <div className="section-heading"><span>Your details</span><small>STEP 1 OF 2</small></div>
+        <div className="step-indicator" aria-label="Step 1 of 2"><span className="step active"><b>1</b> Details</span><i/><span className="step"><b>2</b> Payment</span></div>
+        <form className="form" onSubmit={continueToPayment} noValidate>
+          <div className="field floating"><label htmlFor="name">Full name</label><input id="name" name="name" placeholder=" " value={details.name} onChange={event => update("name", event.target.value)} autoComplete="name" maxLength={60} required/></div>
+          <div className="field floating"><label htmlFor="email">Email</label><input id="email" name="email" type="email" placeholder=" " value={details.email} onChange={event => update("email", event.target.value)} autoComplete="email" required/></div>
+          <div className="field floating"><label htmlFor="rollNumber">Roll number</label><input id="rollNumber" name="rollNumber" placeholder=" " value={details.rollNumber} onChange={event => update("rollNumber", event.target.value)} autoComplete="off" maxLength={20} required/></div>
+          <div className="field floating"><label htmlFor="phone">Phone number</label><input id="phone" name="phone" type="tel" inputMode="numeric" placeholder=" " value={details.phone} onChange={event => update("phone", event.target.value)} autoComplete="tel" maxLength={11} required/></div>
+          {error && <p className="error" role="alert">{error}</p>}
+          <button className="btn full" type="submit">Continue to payment <span aria-hidden="true">→</span></button>
         </form>
-        {error && <div className="error form-feedback" role="alert">{error}</div>}
-        {status && <div className={status.startsWith("Payment rejected") ? "error form-feedback" : "success-note form-feedback"} role="status">{status}</div>}
-        {savedRegistration && <button type="button" className="btn light full" onClick={registerAnotherPerson}>Register another person</button>}
       </div>
       <aside className="event-side">
         <div className="event-fact"><b>⌖</b><div><small>Venue</small><strong>{EVENT_CONFIG.venue}</strong></div></div>
-        <div className="event-fact"><b>▣</b><div><small>Date</small><strong>{EVENT_CONFIG.date}</strong></div></div>
+        <div className="event-fact"><b>❄</b><div><small>Date</small><strong>{EVENT_CONFIG.date}</strong></div></div>
       </aside>
-    </section>
-
+    </section>}
+    <UserFooter />
   </main>;
 }

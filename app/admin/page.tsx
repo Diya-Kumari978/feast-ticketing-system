@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import EVENT_CONFIG from "@/lib/event-config";
 
@@ -40,52 +40,77 @@ function normalizeStats(value: unknown): Stats {
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const inFlight = useRef(false);
 
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const response = await fetch("/api/admin/stats", { cache: "no-store" });
-        const payload: unknown = await response.json().catch(() => null);
-        if (!active) return;
-        setStats(normalizeStats(payload));
-        setLoadError(response.ok ? "" : "Dashboard data is unavailable. Check Supabase configuration.");
-      } catch {
-        if (!active) return;
-        setStats(normalizeStats(null));
-        setLoadError("Dashboard data is unavailable. Check your connection and Supabase configuration.");
+  const load = useCallback(async () => {
+    if (inFlight.current || document.visibilityState === "hidden") return;
+    inFlight.current = true;
+    try {
+      const response = await fetch("/api/admin/stats");
+      if (response.status === 401) {
+        window.location.replace("/admin/login?next=%2Fadmin");
+        return;
       }
-    };
-    void load();
-    const timer = setInterval(() => void load(), 10000);
-    return () => { active = false; clearInterval(timer); };
+      if (!response.ok) {
+        setLoadError("Dashboard data could not be loaded. It will retry automatically.");
+        return;
+      }
+      const payload: unknown = await response.json().catch(() => null);
+      const nextStats = normalizeStats(payload);
+      setStats(nextStats);
+      setLoadError("");
+      setLastUpdated(new Date());
+    } catch {
+      setLoadError("Dashboard data could not be loaded. It will retry automatically.");
+    } finally {
+      inFlight.current = false;
+    }
   }, []);
 
-  const cards: Array<[string, keyof Omit<Stats, "recentScans">]> = [
-    ["Valid Tickets", "valid"],
-    ["Used / Checked-in", "used"],
-    ["Pending Payments", "pending"],
-    ["Invalid / Attempted", "invalid"],
-    ["Total Registered", "total"],
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => void load(), 30000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [load]);
+
+  const cards: Array<[string, keyof Omit<Stats, "recentScans">, string]> = [
+    ["Valid Tickets", "valid", "/admin/valid"],
+    ["Used / Checked-in", "used", "/admin/used"],
+    ["Pending Payments", "pending", "/admin/pending"],
+    ["Invalid / Attempted", "invalid", "/admin/invalid"],
+    ["Total Registered", "total", "/admin/tickets"],
   ];
   const recentScans = stats?.recentScans ?? [];
 
-  return <>
-    <div className="eyebrow">{EVENT_CONFIG.name} operations · {EVENT_CONFIG.date}</div>
-    <h1>Dashboard</h1>
-    <p className="muted">Live ticket and entrance activity · auto refreshes every 10 seconds</p>
+  return <div className="dashboard-page">
+    <section className="dashboard-heading">
+      <div><div className="eyebrow">{EVENT_CONFIG.name} operations · {EVENT_CONFIG.date}</div>
+        <h1>Dashboard</h1>
+        <p className="muted">Live ticket and entrance activity · auto refreshes every 30 seconds</p>
+      </div>
+      <div className="dashboard-tools">
+        {lastUpdated && <span className="dashboard-updated">Updated {lastUpdated.toLocaleTimeString()}</span>}
+      </div>
+    </section>
     {loadError && <p className="error" role="alert">{loadError}</p>}
-    <div className="grid-cards">
-      {cards.map(([label, key]) => <div className="stat" key={key}>
-        <strong>{stats ? stats[key] : "—"}</strong><span>{label}</span>
-      </div>)}
+    {stats && stats.pending > 0 && <div className="pending-notice" role="status">
+      <span>You have {stats.pending} pending payment{stats.pending === 1 ? "" : "s"} to review.</span>
+      <Link className="pending-notice-link" href="/admin/pending">Review now</Link>
+    </div>}
+    <div className="grid-cards dashboard-stat-grid">
+      {cards.map(([label, key, href]) => <Link className="stat dashboard-stat-link" href={href} key={key} aria-label={`${stats?.[key] ?? ""} ${label}`}>
+        <strong className={stats ? "dashboard-count" : ""} style={stats ? { "--count-target": stats[key] } as CSSProperties : undefined}>{stats ? <span className="visually-hidden">{stats[key]}</span> : <span className="skeleton dashboard-stat-skeleton" aria-label="Loading"/>}</strong><span>{label}</span>
+      </Link>)}
     </div>
-    <div className="card" style={{ marginBottom: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="card dashboard-panel">
+      <div className="dashboard-panel-heading">
         <h2 style={{ margin: 0 }}>Recent Scans</h2>
         <Link className="btn light small" href="/admin/invalid">View attempts</Link>
       </div>
-      <div className="table-wrap" style={{ marginTop: 12 }}>
+      <div className="table-wrap dashboard-scan-table">
         <table className="table"><thead><tr><th>Time</th><th>Name</th><th>Status</th><th>Admin</th></tr></thead>
           <tbody>
             {recentScans.map((scan, index) => <tr key={scan.id ?? `scan-${index}`}>
@@ -94,14 +119,15 @@ export default function Dashboard() {
               <td>{scan.result || "—"}</td>
               <td>{scan.scanned_by || "—"}</td>
             </tr>)}
+            {!stats && <tr><td colSpan={4} role="status">Loading recent scans…</td></tr>}
             {stats && recentScans.length === 0 && <tr><td colSpan={4}>No scans recorded yet</td></tr>}
           </tbody>
         </table>
       </div>
     </div>
-    <div className="card" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+    <div className="card dashboard-actions">
       <Link className="btn" href="/admin/scan">Scan Ticket →</Link>
       <Link className="btn light" href="/admin/pending">Review Pending Payments</Link>
     </div>
-  </>;
+  </div>;
 }
